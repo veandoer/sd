@@ -22,8 +22,9 @@ In this task, you should:
    **Answer: Cross-attention is used to condition on prompts or other references. For example, the prompts for txt2img.py are incorporated into the diffusion process by using them as keys/values in the cross-attention step. Using precomputed images of a reference chair for example could lead to improved consistency by guiding the diffusion process.**
 3. Question: In general, what is the contribution of self-attention in this diffusion model?
    - This is just a question; no programming is required.
-   ** Answer: The self-attention seems to play an important role in the actual diffusion process, to generate a detailed, believable image from noise. The changes I applied to the code turn the self-attention into a form of cross-attention. The more I distanced the data from pure self-attention by introducing information from the other batch samples into the tokens, the muddier and less defined the final result looked.**
+   **Answer: The self-attention seems to play an important role in the actual diffusion process, to generate a detailed, believable image from noise. The changes I applied to the code turn the self-attention into a form of cross-attention. The more I distanced the data from pure self-attention by introducing information from the other batch samples into the tokens, the muddier and less defined the final result looked.**
 4. Empirically: Do you need to modify all self-attention layers in the UNet? _Hint: Don't evaluate all individual layers, but groups of layers._
+**Answer: No, as approach #4 shows, where only the inner layers with lower resolutions are modified, while resulting in some improvement regarding similarity without decreasing details in the resulting images**
 
 ## Submission of your results
 Please commit all your changes to your forked repository and create a pull request for this repository to submit your task.

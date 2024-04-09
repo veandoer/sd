@@ -166,45 +166,60 @@ class CrossAttention(nn.Module):
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
-        q = self.to_q(x)
+        # INNER is a very ugly, quick way of finding out which level we are in without having to pass it from the outside
+        # as the UNET decreases in spatial shape and thus in sequence length the closer we get to the center
 
-        ATTENTION_MOD_APPROACH = 5
-
+        ATTENTION_MOD_APPROACH = 4
+        INNER = x.shape[1] <= 1024
+        reshaped_query = False
         if context == None:
-            # Context defaulting means it originally used self attention.
-            # if context != None, cross attention remains unchanged.
-            # Idea 1:
-            # Changes the self attention to a form of cross attention, where the keys and values are made up of the other sample in the batch assumed to be of size 2
-            # this is a very basic idea which could be implemented without needing to retrain the model
-            if ATTENTION_MOD_APPROACH == 1:
-                context = x[[2, 3, 0, 1]]
-            # Idea 2:
-            # Try using a condensed representation of each image. I believe no class tokens are used,
-            # so we could instead use some form of pooling reduce the amount of tokens (here we could go as low as 1 and
-            # as high as vram allows us to) without having to retrain it.
-            # Notice: the closer the ratio of self to foreign tokens for each sample is, the more similar they
-            # become while losing details and realism
-            elif ATTENTION_MOD_APPROACH == 2:
-                x1 = rearrange(x, "b seq c -> b c seq")
-                x1 = torch.nn.functional.avg_pool1d(x1, 2, 2)
-                # x1 = rearrange(x1, "b c seq -> b seq c")
-                # context = torch.cat((x, x1[[2, 3, 0, 1]]), dim=1)
-                # print(f"{context.shape =}")
-                x1 = rearrange(x1, "b c seq -> 1 (b seq) c")
-                context = x1.expand(x.shape[0], -1, -1)
+            if INNER or ATTENTION_MOD_APPROACH == 5:
+                # Context defaulting means it originally used self attention.
+                # if context != None, cross attention remains unchanged.
+                # Idea 1:
+                # Changes the self attention to a form of cross attention, where the keys and values are made up of the other sample in the batch assumed to be of size 2
+                # this is a very basic idea which could be implemented without needing to retrain the model
+                if ATTENTION_MOD_APPROACH == 1:
+                    context = x[[2, 3, 0, 1]]
+                # Idea 2:
+                # Try using a condensed representation of each image. I believe no class tokens are used,
+                # so we could instead use some form of pooling reduce the amount of tokens (here we could go as low as 1 and
+                # as high as vram allows us to) without having to retrain it.
+                # Notice: the closer the ratio of self to foreign tokens for each sample is, the more similar they
+                # become while losing details and realism
+                elif ATTENTION_MOD_APPROACH == 2:
+                    # we use 1d pooling, though this sequence could be reshaped back into 2d and treated with 2d pooling
+                    # which would respect the spatial structure much better
+                    x1 = rearrange(x, "b seq c -> b c seq")
+                    x1 = torch.nn.functional.avg_pool1d(x1, 2, 2)
+                    # x1 = rearrange(x1, "b c seq -> b seq c")
+                    # context = torch.cat((x, x1[[2, 3, 0, 1]]), dim=1)
+                    # print(f"{context.shape =}")
+                    x1 = rearrange(x1, "b c seq -> 1 (b seq) c")
+                    context = x1.expand(x.shape[0], -1, -1)
 
-            # 3rd approach:
-            # compute the weighted average over all samples
-            # this makes textures very similar, but also forces the same orientation on the object
-            # leading to distorted looking geometry.
-            elif ATTENTION_MOD_APPROACH == 4:
-                context = (
-                    x.mean(dim=0, keepdim=True).expand(x.shape[0], -1, -1) + 2 * x
-                ) / 3.0
+                # 3rd approach:
+                # compute the weighted average over all samples
+                # this makes textures very similar, but also forces the same orientation on the object
+                # leading to distorted looking geometry.
+                elif ATTENTION_MOD_APPROACH == 3 or ATTENTION_MOD_APPROACH == 5:
+                    context = (
+                        x.mean(dim=0, keepdim=True).expand(x.shape[0], -1, -1) + 2 * x
+                    ) / 3.0
 
-            elif ATTENTION_MOD_APPROACH == 0:
+                # reshape all images into one long sequence
+                # best results
+                # high impact on memory usage, I only can use this for the inner layers without
+                # running out of memory
+                elif ATTENTION_MOD_APPROACH >= 4:
+                    x = rearrange(x, "b seq c -> 1 (b seq) c")
+                    context = x
+                    reshaped_query = True
+
+            if ATTENTION_MOD_APPROACH == 0 or not INNER:
                 context = default(context, x)
 
+        q = self.to_q(x)
         k = self.to_k(context)
         v = self.to_v(context)
 
@@ -222,7 +237,12 @@ class CrossAttention(nn.Module):
         attn = sim.softmax(dim=-1)
 
         out = einsum("b i j, b j d -> b i d", attn, v)
+
         out = rearrange(out, "(b h) n d -> b n (h d)", h=h)
+        if (
+            reshaped_query
+        ):  # ATTENTION_MOD_APPROACH == 5 and inner and out.shape[0] == 1:
+            out = rearrange(out, "a (b seq) c -> (a b) seq c", b=4)
         return self.to_out(out)
 
 
